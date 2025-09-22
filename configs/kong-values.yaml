@@ -1,0 +1,153 @@
+# Kong Gateway Helm Values Configuration
+# This file configures Kong Gateway for the AI Gateway architecture
+
+# Kong Proxy Configuration
+proxy:
+  enabled: true
+  type: LoadBalancer
+  http:
+    enabled: true
+    servicePort: 80
+    containerPort: 8000
+  tls:
+    enabled: true
+    servicePort: 443
+    containerPort: 8443
+  ingress:
+    enabled: false
+
+# Kong Admin API Configuration
+admin:
+  enabled: true
+  type: ClusterIP
+  http:
+    enabled: true
+    servicePort: 8001
+    containerPort: 8001
+  tls:
+    enabled: false
+
+# Kong Manager (Enterprise UI)
+manager:
+  enabled: false
+
+# Portal (Developer Portal)
+portal:
+  enabled: false
+
+# Environment Variables
+env:
+  # Database Configuration (using PostgreSQL)
+  database: postgres
+  pg_host: postgres-service
+  pg_port: 5432
+  pg_database: kong
+  pg_user: kong
+  pg_password: kong_password
+  
+  # Logging Configuration
+  log_level: info
+  proxy_access_log: /dev/stdout
+  admin_access_log: /dev/stdout
+  proxy_error_log: /dev/stderr
+  admin_error_log: /dev/stderr
+  
+  # Plugin Configuration
+  plugins: "bundled,rate-limiting,jwt,cors,request-transformer,response-transformer,prometheus"
+  
+  # Performance Tuning
+  nginx_worker_processes: auto
+  nginx_worker_connections: 1024
+
+# Resource Configuration
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# Autoscaling Configuration
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Health Checks
+readinessProbe:
+  httpGet:
+    path: /status
+    port: 8000
+    scheme: HTTP
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  successThreshold: 1
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /status
+    port: 8000
+    scheme: HTTP
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+# PostgreSQL Database (for Kong configuration storage)
+postgresql:
+  enabled: true
+  auth:
+    username: kong
+    password: kong_password
+    database: kong
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+# Service Monitor for Prometheus
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  namespace: kong
+  labels:
+    app: kong
+
+# Security Context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Node Selector (optional)
+nodeSelector: {}
+
+# Tolerations (optional)
+tolerations: []
+
+# Affinity Rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - kong
+        topologyKey: kubernetes.io/hostname
