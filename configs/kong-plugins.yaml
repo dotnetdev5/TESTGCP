@@ -1,0 +1,327 @@
+# Kong Plugins Configuration
+# This file defines Kong plugins for rate limiting, authentication, and monitoring
+
+# Rate Limiting Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting-plugin
+  namespace: kong
+plugin: rate-limiting
+config:
+  minute: 100
+  hour: 1000
+  day: 10000
+  policy: local
+  hide_client_headers: false
+  fault_tolerant: true
+
+---
+# JWT Authentication Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: jwt-auth-plugin
+  namespace: kong
+plugin: jwt
+config:
+  uri_param_names:
+    - jwt
+  cookie_names:
+    - jwt
+  header_names:
+    - authorization
+  claims_to_verify:
+    - exp
+    - iat
+  key_claim_name: iss
+  secret_is_base64: false
+  run_on_preflight: true
+
+---
+# CORS Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: cors-plugin
+  namespace: kong
+plugin: cors
+config:
+  origins:
+    - "*"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  headers:
+    - Accept
+    - Accept-Version
+    - Content-Length
+    - Content-MD5
+    - Content-Type
+    - Date
+    - Authorization
+    - X-Auth-Token
+  exposed_headers:
+    - X-Auth-Token
+  credentials: true
+  max_age: 3600
+  preflight_continue: false
+
+---
+# Request Transformer Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-transformer-plugin
+  namespace: kong
+plugin: request-transformer
+config:
+  add:
+    headers:
+      - "X-Gateway-Source:kong"
+      - "X-Request-ID:$(uuid)"
+    querystring: []
+    body: []
+  append:
+    headers: []
+    querystring: []
+    body: []
+  remove:
+    headers: []
+    querystring: []
+    body: []
+  replace:
+    headers: []
+    querystring: []
+    body: []
+    uri: ""
+
+---
+# Response Transformer Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: response-transformer-plugin
+  namespace: kong
+plugin: response-transformer
+config:
+  add:
+    headers:
+      - "X-Gateway-Response:kong"
+      - "X-Response-Time:$(latency)"
+    json: []
+    json_types: []
+  append:
+    headers: []
+    json: []
+    json_types: []
+  remove:
+    headers: []
+    json: []
+  replace:
+    headers: []
+    json: []
+
+---
+# Prometheus Plugin for Metrics
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: prometheus-plugin
+  namespace: kong
+plugin: prometheus
+config:
+  per_consumer: true
+  status_code_metrics: true
+  latency_metrics: true
+  bandwidth_metrics: true
+  upstream_health_metrics: true
+
+---
+# IP Restriction Plugin (Optional)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ip-restriction-plugin
+  namespace: kong
+plugin: ip-restriction
+config:
+  allow: []  # Add allowed IPs here
+  deny: []   # Add denied IPs here
+  status: 403
+  message: "Your IP address is not allowed"
+
+---
+# Request Size Limiting Plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-size-limiting-plugin
+  namespace: kong
+plugin: request-size-limiting
+config:
+  allowed_payload_size: 10  # 10MB
+  size_unit: megabytes
+  require_content_length: false
+
+---
+# Bot Detection Plugin (Enterprise feature)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: bot-detection-plugin
+  namespace: kong
+plugin: bot-detection
+config:
+  allow: []
+  deny: []
+  whitelist: []
+  blacklist: []
+
+---
+# Service Configuration with Plugins
+apiVersion: configuration.konghq.com/v1
+kind: KongIngress
+metadata:
+  name: backend-service-ingress
+  namespace: default
+upstream:
+  algorithm: round-robin
+  hash_on: none
+  hash_fallback: none
+  healthchecks:
+    active:
+      concurrency: 10
+      healthy:
+        http_statuses:
+          - 200
+          - 302
+        interval: 10
+        successes: 2
+      http_path: "/health"
+      timeout: 6
+      unhealthy:
+        http_failures: 3
+        http_statuses:
+          - 429
+          - 404
+          - 500
+          - 501
+          - 502
+          - 503
+          - 504
+          - 505
+        interval: 10
+        tcp_failures: 3
+        timeouts: 3
+    passive:
+      healthy:
+        http_statuses:
+          - 200
+          - 201
+          - 202
+          - 203
+          - 204
+          - 205
+          - 206
+          - 300
+          - 301
+          - 302
+          - 303
+          - 304
+          - 307
+          - 308
+        successes: 5
+      unhealthy:
+        http_failures: 5
+        http_statuses:
+          - 429
+          - 500
+          - 503
+        tcp_failures: 2
+        timeouts: 7
+proxy:
+  protocol: http
+  path: /
+  connect_timeout: 10000
+  write_timeout: 10000
+  read_timeout: 10000
+  retries: 5
+route:
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+  regex_priority: 0
+  strip_path: false
+  preserve_host: false
+  protocols:
+    - http
+    - https
+
+---
+# Ingress Resource with Kong Annotations
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-gateway-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limiting-plugin,cors-plugin,request-transformer-plugin,response-transformer-plugin,prometheus-plugin
+    konghq.com/strip-path: "false"
+    konghq.com/preserve-host: "true"
+    konghq.com/https-redirect-status-code: "301"
+spec:
+  rules:
+  - host: api.yourdomain.com  # Replace with your domain
+    http:
+      paths:
+      - path: /api/v1
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 80
+      - path: /litellm
+        pathType: Prefix
+        backend:
+          service:
+            name: litellm-service
+            port:
+              number: 4000
+  tls:
+  - hosts:
+    - api.yourdomain.com
+    secretName: api-tls-secret
+
+---
+# Consumer for JWT Authentication
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: ai-gateway-consumer
+  namespace: kong
+  annotations:
+    kubernetes.io/ingress.class: kong
+username: ai-gateway-user
+custom_id: ai-gateway-001
+
+---
+# JWT Credential for Consumer
+apiVersion: configuration.konghq.com/v1
+kind: KongCredential
+metadata:
+  name: ai-gateway-jwt-credential
+  namespace: kong
+consumerRef: ai-gateway-consumer
+type: jwt
+config:
+  key: ai-gateway-issuer
+  algorithm: HS256
+  secret: your-jwt-secret-key-here  # Replace with actual secret

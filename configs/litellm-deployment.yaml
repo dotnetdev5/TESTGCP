@@ -1,0 +1,258 @@
+# LiteLLM Deployment Configuration
+# This service provides unified AI model management and routing
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: default
+  labels:
+    app: litellm
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+        version: v1
+    spec:
+      serviceAccountName: litellm-sa
+      containers:
+      - name: litellm
+        image: ghcr.io/berriai/litellm:main-latest
+        ports:
+        - containerPort: 4000
+          name: http
+        env:
+        - name: PORT
+          value: "4000"
+        - name: LITELLM_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-secrets
+              key: master-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: litellm-secrets
+              key: database-url
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/var/secrets/google/key.json"
+        - name: VERTEX_PROJECT
+          value: "PROJECT_ID"
+        - name: VERTEX_LOCATION
+          value: "us-central1"
+        - name: LITELLM_LOG
+          value: "INFO"
+        - name: LITELLM_DROP_PARAMS
+          value: "true"
+        - name: LITELLM_SET_VERBOSE
+          value: "true"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+          readOnly: true
+        - name: litellm-config
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+          readOnly: true
+      volumes:
+      - name: google-cloud-key
+        secret:
+          secretName: google-cloud-key
+      - name: litellm-config
+        configMap:
+          name: litellm-config
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-service
+  namespace: default
+  labels:
+    app: litellm
+spec:
+  type: ClusterIP
+  ports:
+  - port: 4000
+    targetPort: 4000
+    protocol: TCP
+    name: http
+  selector:
+    app: litellm
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: litellm-sa
+  namespace: default
+  annotations:
+    iam.gke.io/gcp-service-account: litellm@PROJECT_ID.iam.gserviceaccount.com
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: default
+data:
+  config.yaml: |
+    model_list:
+      # Vertex AI Models
+      - model_name: gemini-pro
+        litellm_params:
+          model: vertex_ai/gemini-pro
+          vertex_project: PROJECT_ID
+          vertex_location: us-central1
+      
+      - model_name: gemini-pro-vision
+        litellm_params:
+          model: vertex_ai/gemini-pro-vision
+          vertex_project: PROJECT_ID
+          vertex_location: us-central1
+      
+      - model_name: text-bison
+        litellm_params:
+          model: vertex_ai/text-bison
+          vertex_project: PROJECT_ID
+          vertex_location: us-central1
+      
+      - model_name: chat-bison
+        litellm_params:
+          model: vertex_ai/chat-bison
+          vertex_project: PROJECT_ID
+          vertex_location: us-central1
+      
+      # OpenAI Models (if API key is provided)
+      - model_name: gpt-3.5-turbo
+        litellm_params:
+          model: openai/gpt-3.5-turbo
+          api_key: os.environ/OPENAI_API_KEY
+      
+      - model_name: gpt-4
+        litellm_params:
+          model: openai/gpt-4
+          api_key: os.environ/OPENAI_API_KEY
+
+    litellm_settings:
+      # Logging
+      set_verbose: true
+      json_logs: true
+      
+      # Caching
+      cache: true
+      cache_type: redis
+      redis_host: redis-service
+      redis_port: 6379
+      
+      # Rate limiting
+      max_budget: 1000
+      budget_duration: 1h
+      
+      # Fallbacks
+      fallbacks:
+        - ["gemini-pro", "text-bison"]
+        - ["gpt-4", "gpt-3.5-turbo", "gemini-pro"]
+      
+      # Success callback
+      success_callback: ["prometheus"]
+      
+      # Failure callback
+      failure_callback: ["prometheus"]
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/DATABASE_URL
+      
+      # UI Settings
+      ui_username: admin
+      ui_password: os.environ/LITELLM_UI_PASSWORD
+      
+      # CORS
+      allow_cors: true
+      cors_origins: ["*"]
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-secrets
+  namespace: default
+type: Opaque
+data:
+  # Base64 encoded values - replace with actual values
+  master-key: bGl0ZWxsbS1tYXN0ZXIta2V5LTEyMw== # litellm-master-key-123
+  database-url: cG9zdGdyZXNxbDovL3VzZXI6cGFzc3dvcmRAbG9jYWxob3N0OjU0MzIvbGl0ZWxsbQ== # postgresql://user:password@localhost:5432/litellm
+  ui-password: YWRtaW4xMjM= # admin123
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: litellm-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: litellm
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm-pdb
+  namespace: default
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: litellm
